@@ -406,7 +406,15 @@ def convertsColsToArray(conn, table_name, indep, dep=''):
                               '''               
         
     convert_to_arr_stmt = convert_to_arr_stmt.format(**data_dict)                              
-    conn.executeQuery(convert_to_arr_stmt)
+    print data_dict
+
+    try:
+        cur=conn.conn.cursor()
+        cur.execute(convert_to_arr_stmt)
+    except:
+        print "Could not execute sql query:"
+        print convert_to_arr_stmt
+
     return output_table, indep_cols_arr_name
                           
 if(__name__=='__main__'):

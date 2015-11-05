@@ -143,7 +143,7 @@ class LinearRegression(SupervisedLearning):
             ) 
             logging.info('statement :{0}'.format(stmt))
             
-            mdl_params = psql.read_frame(stmt, self.dbconn.getConnection())
+            mdl_params = psql.read_sql(stmt, self.dbconn.getConnection())
             for param in mdl_params.columns:
                 self.model[param] = mdl_params.get(param)[0]
             
@@ -178,7 +178,7 @@ class LinearRegression(SupervisedLearning):
                               table_name=predict_table_name,
                               madlib_schema=self.dbconn.getMADlibSchema()
                              )
-            prediction_results = psql.read_frame(stmt,self.dbconn.getConnection())
+            prediction_results = psql.read_sql(stmt,self.dbconn.getConnection())
             return prediction_results
       
 class LogisticRegression(SupervisedLearning):
@@ -234,7 +234,7 @@ class LogisticRegression(SupervisedLearning):
                               ) 
             
             logging.info('statement :{0}'.format(stmt))
-            mdl_params = psql.read_frame(stmt, self.dbconn.getConnection())
+            mdl_params = psql.read_sql(stmt, self.dbconn.getConnection())
             for param in mdl_params.columns:
                 self.model[param] = mdl_params.get(param)[0]
             
@@ -287,7 +287,7 @@ class LogisticRegression(SupervisedLearning):
                                  )
 
             logging.info('statement:{0}'.format(stmt))
-            prediction_results = psql.read_frame(stmt,self.dbconn.getConnection())
+            prediction_results = psql.read_sql(stmt,self.dbconn.getConnection())
             return prediction_results
       
 class SVM(SupervisedLearning):      
@@ -601,8 +601,8 @@ class KMeans(object):
             self.model = {}
             logging.info('statement :{0}'.format(stmt))
             
-            psql.read_frame(stmt, self.dbconn.getConnection())
-            mdl_params = psql.read_frame(stmt, self.dbconn.getConnection())
+            psql.read_sql(stmt, self.dbconn.getConnection())
+            mdl_params = psql.read_sql(stmt, self.dbconn.getConnection())
             for param in mdl_params.columns:
                 self.model[param] = mdl_params.get(param)[0]
             
