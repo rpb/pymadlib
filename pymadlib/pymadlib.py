@@ -83,7 +83,7 @@ class DBConnect(object):
             '''
             Return MADlib version string
             '''
-            cur = self.conn.conn.cursor()
+            cur = self.conn.cursor()
             try: 
                 cur.execute("select madlib.version();")
                 self.madlibInfo = cur.fetchall()
