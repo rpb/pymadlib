@@ -78,6 +78,20 @@ class DBConnect(object):
                 Return the MADlib schema name
             '''
             return self.madlib_schema
+        
+        def getMADlibInfo(self):
+            '''
+            Return MADlib version string
+            '''
+            cur = self.conn.conn.cursor()
+            try: 
+                cur.execute("select madlib.version();")
+                self.madlibInfo = cur.fetchall()
+                self.madlibVersion = float(self.madlibInfo[0][0].split(",")[0].split(":")[1].strip())
+            except:
+                print "Could not get MADlib version information"
+                
+            
       
 class SupervisedLearning(object):
         ''' Base class for all supervised ML algorithms in MADlib '''
