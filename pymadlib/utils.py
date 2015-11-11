@@ -1,11 +1,17 @@
 '''
     4 Jan 2013, vatsan.cs@utexas.edu>
     Utility functions for PyMADlib. Currently this supports dummy coding of categorical columns (Pivoting).
+    
+    Nov 2015, robert.paul.bennett@gmail.com
+    Added new printing functions and fucntionality for MADlib version >= 1.6
 '''
 import pickle 
 import pandas.io.sql as psql
 
 default_schema = 'public'
+
+# Long variable names are fine for python, but prefix
+# burns 11 to 15 characters of the maximum allowable 63 on most SQL systems
 default_prefix = 'gp_pymdlib_'
 default_prefix_arr = 'gp_pymdlib_arr_'
 MAX_DISTINCT_VALS = 128
@@ -271,7 +277,8 @@ def __createPivotTable__(conn, output_table, col_types_dict, col_names_and_types
                '''
     stmt = stmt.format(**data_dict)
     psql.execute(stmt, conn.getConnection())
-    
+    conn.conn.commit()
+
     
 def pivotCategoricalColumns(conn,table_name,cols,label='',col_distinct_vals_dict=None):
     '''
@@ -343,7 +350,7 @@ def pivotCategoricalColumns(conn,table_name,cols,label='',col_distinct_vals_dict
     output_dep_col = label                                   
     return output_table, output_indep_cols, output_dep_col, col_distinct_vals_dict
 
-def convertsColsToArray(conn, table_name, indep, dep=''):
+def convertsColsToArray(conn, table_name, indep, dep='', verbose=False):
     '''
        Convert a list of independent columns (all numeric) to an array column and return the transformed table
        
@@ -406,16 +413,36 @@ def convertsColsToArray(conn, table_name, indep, dep=''):
                               '''               
         
     convert_to_arr_stmt = convert_to_arr_stmt.format(**data_dict)                              
-    print data_dict
+    if verbose:
+        print "convertsColsToArray data dictionary:"
+        print data_dict
 
     try:
         cur=conn.conn.cursor()
         cur.execute(convert_to_arr_stmt)
+        conn.conn.commit()
+        print convert_to_arr_stmt
     except:
         print "Could not execute sql query:"
         print convert_to_arr_stmt
 
     return output_table, indep_cols_arr_name
+
+def printSQL(stmt):
+    print "###################################"
+    print "Executing the following SQL Query:"
+    print stmt
+    print "###################################"
+
+def mkArrString(arr):
+    la = len(arr)
+    ostring = "\'ARRAY["
+    for idx, val in enumerate(arr):
+        ostring += str(val)
+        if idx < (la-1):
+            ostring += ","
+    ostring += "]\'"
+    return ostring
                           
 if(__name__=='__main__'):
     from pymadlib import DBConnect
