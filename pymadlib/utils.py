@@ -436,12 +436,12 @@ def printSQL(stmt):
 
 def mkArrString(arr):
     la = len(arr)
-    ostring = "\'ARRAY["
+    ostring = "ARRAY["
     for idx, val in enumerate(arr):
         ostring += str(val)
         if idx < (la-1):
             ostring += ","
-    ostring += "]\'"
+    ostring += "]"
     return ostring
                           
 if(__name__=='__main__'):
