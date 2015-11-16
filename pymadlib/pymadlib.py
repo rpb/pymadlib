@@ -122,13 +122,13 @@ class LinearRegression(SupervisedLearning):
             super(LinearRegression,self).__init__(conn)
       
           
-        def train(self, table_name, indep, dep):
+        def train(self, table_name, indep, dep, out_table=None, group_col=None, heteroskedasticity=False, verbose=False):
             ''' 
               Given train a linear regression model on the specified table 
               for the given set of independent and dependent variables 
               Inputs :
               ========
-              table_name : (String) input table name
+              table_name : (String) source table name
               indep : (list of strings) the independent variables to be used to build the model on
               dep : (string) the class label
               
@@ -140,17 +140,26 @@ class LinearRegression(SupervisedLearning):
             '''
                  
             indep_org = indep
-            
-            #Transform the columns if any of them are categorical
-            table_name, indep, dep, col_distinct_vals_dict = pivotCategoricalColumns(self.dbconn,table_name, indep, dep)
-            #        
             self.model = {}
-            self.model['indep'] = 'array[{0}]'.format(','.join(indep))
+            
+            if self.madlib_version >= 1.6:
+                indep = mkArrString(indep)
+                self.model['indep']=indep
+                if group_col is None:
+                    groupcol = 'NULL'
+                else:
+                    groupcol = group_col
+
+            else:
+                #Transform the columns if any of them are categorical
+                table_name, indep, dep, col_distinct_vals_dict = pivotCategoricalColumns(self.dbconn,table_name, indep, dep)
+                self.model['col_distinct_vals_dict'] = col_distinct_vals_dict
+                self.model['indep'] = 'array[{0}]'.format(','.join(indep))
+            
             self.model['indep_org'] = indep_org
-            self.model['col_distinct_vals_dict'] = col_distinct_vals_dict
             self.model['dep'] = dep
             
-            if self.madlib_version>=1.6:
+            if self.madlib_version >= 1.6:
                 stmt = '''
                       select ({madlib_schema}.linregr({dep},{indep})).* 
                       from {table_name}
@@ -160,6 +169,39 @@ class LinearRegression(SupervisedLearning):
                                  madlib_schema = self.dbconn.getMADlibSchema()
                                  )
 
+                default_schema = 'public'
+                default_prefix = 'gp_pymdlib_'
+                tbl_schema = 'public' if '.' not in table_name else table_name.split('.')[0]
+                tbl_nm = table_name.split('.')[1] if '.' in table_name else table_name
+                out_tbl_nm = tbl_nm.replace(default_prefix,'')
+                if out_table is None:
+                    default_prefix_arr = 'pymdlib_linregr_trained_'
+                    out_table ='{tbl_schema}.{default_prefix_arr}{table_name}'.format(tbl_schema=tbl_schema,
+                                                                                          default_prefix_arr=default_prefix_arr,
+                                                                                          table_name=out_tbl_nm
+                                                                                          )
+                out_table_summary = out_table+'_summary'                
+                stmt = '''                                                                         
+                          drop table if exists {out_table} cascade;                                
+                          drop table if exists {out_table_sum} cascade;                            
+                          select {madlib_schema}.linregr_train('{table_name}', '{out_table}', '{dep}', '{indep}', '{group_col}', '{heterosked}');                               
+                         '''.format(dep=dep,
+                                    indep=self.model['indep'],
+                                    table_name=table_name,
+                                    out_table=out_table,
+                                    out_table_sum=out_table_summary,
+                                    group_col=groupcol,
+                                    heterosked=heteroskedasticity,
+                                    madlib_schema=self.dbconn.madlib_schema
+                                    )
+
+                if verbose:
+                    printSQL(stmt)
+                self.model['output_table_name']= out_table
+                psql.execute(stmt,self.dbconn.getConnection())
+                self.dbconn.conn.commit()
+                stmt = '''select * from {out_table}'''.format(out_table=out_table)
+                logging.info('statement :{0}'.format(stmt))
                 
             else:
                 stmt = '''
@@ -171,14 +213,16 @@ class LinearRegression(SupervisedLearning):
                                  madlib_schema = self.dbconn.getMADlibSchema()
                                  ) 
             logging.info('statement :{0}'.format(stmt))
-            
+            if verbose:
+                    printSQL(stmt)
+
             mdl_params = psql.read_sql(stmt, self.dbconn.getConnection())
             for param in mdl_params.columns:
                 self.model[param] = mdl_params.get(param)[0]
             
             return self.model, mdl_params
         
-        def predict(self, predict_table_name, actual_label_col=''):
+        def predict(self, predict_table_name, actual_label_col='',indep=None, depTrue=None, key=None, threshold=0.5):
             ''' 
               Return predicted values using the trained model. Also return precision, recall & f-measure
               Input:
@@ -191,18 +235,43 @@ class LinearRegression(SupervisedLearning):
               A dataframe of the prediction results
               
             '''
-            #Transform the columns if any of them are categorical
-            predict_table_name, _indep, _dep, _discard = pivotCategoricalColumns(self.dbconn,predict_table_name, 
-                                                                       self.model['indep_org'], 
-                                                                       actual_label_col,
-                                                                       self.model['col_distinct_vals_dict']
-                                                        )
+            
+            if self.madlib_version>=1.6:
+                    if indep is None:
+                        indep = self.model['indep_org']
+                    indep = mkArrString(indep)
+            else:
 
+            #Transform the columns if any of them are categorical
+                predict_table_name, _indep, _dep, _discard = pivotCategoricalColumns(self.dbconn,predict_table_name, 
+                                                                                     self.model['indep_org'], 
+                                                                                     actual_label_col,
+                                                                                     self.model['col_distinct_vals_dict']
+                                                                                     )
+                
 
             if self.madlib_version>=1.6:
-                stmt = '''
-                       
-                       '''
+                stmt = '''SELECT '''
+
+                if (key is not None):
+                    stmt += 'p.{key}, '
+
+                stmt += "madlib.linregr_predict(m.coef, {indep})"
+
+                if (depTrue is not None):
+                    stmt += ", p.{dep}"
+
+                stmt +="\nFROM {predict_table} p, {model_table} m"
+
+                if (key is not None):
+                    stmt += "\nORDER BY p.{key}"
+
+                stmt = stmt.format(dep=depTrue,
+                                   indep=indep,
+                                   model_table=self.model['output_table_name'],
+                                   predict_table=predict_table_name,
+                                   key=key)
+
 
             else:
                 stmt = '''
@@ -215,6 +284,7 @@ class LinearRegression(SupervisedLearning):
                               table_name=predict_table_name,
                               madlib_schema=self.dbconn.getMADlibSchema()
                              )
+            logging.info('statement:{0}'.format(stmt))
             prediction_results = psql.read_sql(stmt,self.dbconn.getConnection())
             return prediction_results
       
@@ -299,7 +369,7 @@ class LogisticRegression(SupervisedLearning):
                 stmt = '''
                           drop table if exists {out_table} cascade;
                           drop table if exists {out_table_sum} cascade;
-                          select {madlib_schema}.logregr_train('{table_name}', '{out_table}', '{dep}', {indep}, {group_col}, {numIter}, '{optimizer}', {precision});
+                          select {madlib_schema}.logregr_train('{table_name}', '{out_table}', '{dep}', '{indep}', {group_col}, {numIter}, '{optimizer}', {precision});
                          '''.format(dep=dep,
                                     indep=self.model['indep'],
                                     table_name=table_name,
@@ -317,6 +387,7 @@ class LogisticRegression(SupervisedLearning):
                 self.model['output_table_name']= out_table         
                 psql.execute(stmt,self.dbconn.getConnection())
                 self.dbconn.conn.commit()
+                logging.info('statement :{0}'.format(stmt))
                 stmt = '''select * from {out_table}'''.format(out_table=out_table)
                                      
             else:
@@ -361,7 +432,7 @@ class LogisticRegression(SupervisedLearning):
                 if self.madlib_version>=1.6:
                     if indep is None:
                         indep = self.model['indep_org']
-                    indep = mkArrString(indep)[1:-1]
+                    indep = mkArrString(indep)
                 else:
                     predict_table_name, indep, dep, _ = pivotCategoricalColumns(self.dbconn,predict_table_name, self.model['indep_org'], actual_label_col)
                     #Convert transformed independent columns into an array
@@ -444,7 +515,256 @@ class LogisticRegression(SupervisedLearning):
                 if self.madlib_version>=1.6:
                     if indep is None:
                         indep = self.model['indep_org']
-                    indep = mkArrString(indep)[1:-1]
+                    indep = mkArrString(indep)
+                else:
+                    predict_table_name, indep, dep, _ = pivotCategoricalColumns(self.dbconn,predict_table_name, self.model['indep_org'], actual_label_col)
+                    #Convert transformed independent columns into an array
+                    predict_table_name, indep = convertsColsToArray(self.dbconn, predict_table_name, indep, dep)
+                
+            stmt = ''' '''
+            if self.madlib_version>=1.6:
+                if key is None:
+                    stmt = '''
+                          SELECT madlib.logregr_predict_prob(m.coef, {indep}) 
+                          FROM {predict_table} p, {model_table} m
+                          '''.format(indep=indep,
+                                     model_table=self.model['output_table_name'],
+                                     predict_table=predict_table_name)
+                else:
+                    stmt = '''
+                          SELECT p.{key}, madlib.logregr_predict_prob(m.coef, {indep}) 
+                          FROM {predict_table} p, {model_table} m
+                          ORDER by p.{key}
+                          '''.format(indep=indep,
+                                     model_table=self.model['output_table_name'],
+                                     predict_table=predict_table_name, 
+                                     key=key)
+
+            if verbose:
+                printSQL(stmt)
+            logging.info('statement:{0}'.format(stmt))
+            prediction_results = psql.read_sql(stmt,self.dbconn.getConnection())
+            return prediction_results
+
+
+
+
+
+
+class ClusterVariance(SupervisedLearning):
+        ''' 
+        Python Wrapper to invoke MADlib's Cluster Variance Regression Algorithm 
+        http://doc.madlib.net/v1.6/group__grp__clustered__errors.html
+        '''
+        def __init__(self,conn):
+            super(ClusterVariance,self).__init__(conn)
+            self.model=None
+
+        def linearRegression(self, 
+                             source_table, 
+                             dep,
+                             indep,
+                             clustervar,
+                             group_col=None,
+                             out_table=None,
+                             verbose=False):
+
+            ''' 
+              Given train a logistic regression model on the specified table 
+              for the given set of independent and dependent variables 
+              Inputs :
+              ========
+              source_table : (String) input table name
+              indep : (String) column containing independent variables as an array, to be used to build the model on
+                                                     OR
+                      (List) a list of strings, where each element of the list is a column name of table_name or is a constant number                      
+              dep : (String) the class label.
+              group_col: (List) used to group the input dataset into discrete groups, running one regression per group. Similar to the SQL "GROUP BY" clause. 
+                         When this value is not provided, no grouping is used and a single result model is generated.
+              numIter: (Int) The maximum number of iterations that are allowed.
+              optimizer: (String) The name of the optimizer to use:
+                                  'newton' or 'irls' Iteratively reweighted least squares
+                                  'cg' conjugate gradient
+                                  'igd' incremental gradient descent. 
+              precision: (Float) The difference between log-likelihood values in successive iterations that should indicate convergence. 
+                                 A zero disables the convergence criterion, so that execution stops after n iterations have completed.
+
+              verbose: (Bool) Provides verbose output of the results of training. 
+
+              Output :
+              ========
+              The Model coefficients, r2, p_values and t_stats
+              The function also returns the model object.            
+            '''
+            self.model = {}
+            if self.madlib_version<1.6:
+                print "This function is not supported in MADlib v%s"%str(self.madlib_version)
+                return 0
+
+            if(isinstance(indep,[].__class__)):
+                self.model['indep_org']=indep
+                indep = mkArrString(indep)
+            else:
+                self.model['indep_org'] = indep
+               
+            self.model['indep'] = indep
+            self.model['dep'] = dep
+            if self.madlib_version>=1.6:
+                self.model['cluster_variable']=clustervar
+                self.model['optimizer']=optimizer
+                self.model['grouping_cols']=group_col
+                if group_col is None:
+                    groupcol = 'NULL'
+
+                else:
+                    groupcol = group_col
+
+                default_schema = 'public'
+                default_prefix = 'gp_pymdlib_'
+                tbl_schema = 'public' if '.' not in table_name else table_name.split('.')[0]
+                tbl_nm = table_name.split('.')[1] if '.' in table_name else table_name
+                out_tbl_nm = tbl_nm.replace(default_prefix,'')
+                if out_table is None:
+                    default_prefix_arr = 'pymdlib_cluster_var_linreg_results'
+                    out_table ='{tbl_schema}.{default_prefix_arr}{table_name}'.format(tbl_schema=tbl_schema, 
+                                                                                          default_prefix_arr=default_prefix_arr, 
+                                                                                          table_name=out_tbl_nm
+                                                                                          ) 
+                out_table_summary = out_table+'_summary'
+                stmt = '''
+                          drop table if exists {out_table} cascade;
+                          drop table if exists {out_table_sum} cascade;
+                          select {madlib_schema}.clustered_variance_linregr('{table_name}', '{out_table}', '{dep}', {indep}, '{cluster}');
+                         '''.format(dep=dep,
+                                    indep=self.model['indep'],
+                                    table_name=table_name,
+                                    out_table=out_table,
+                                    cluster=clustervar,
+                                    group_col=groupcol,
+                                    madlib_schema=self.dbconn.madlib_schema
+                                    )
+
+                if verbose:
+                    printSQL(stmt)
+                self.model['output_table_name']= out_table         
+                psql.execute(stmt,self.dbconn.getConnection())
+                self.dbconn.conn.commit()
+                stmt = '''select * from {out_table}'''.format(out_table=out_table)
+                                     
+            if verbose:
+                printSQL(stmt)
+            logging.info('statement :{0}'.format(stmt))
+            mdl_params = psql.read_sql(stmt, self.dbconn.getConnection())
+            
+            for param in mdl_params.columns:
+                self.model[param] = mdl_params.get(param)[0]
+            
+            return self.model, mdl_params
+                   
+        
+        def predict(self, predict_table_name,actual_label_col='',indep=None, depTrue=None, key=None, threshold=0.5):
+            ''' 
+              Return predicted values using the trained model. Also return precision, recall & f-measure
+              Input:
+              ======
+              predict_table_name : (String) the name of the table to be used for prediction
+              actual_label_col : (String) the name of the actual label column (will be ignored if empty).
+              threshold : (float), the probability beyond which the predicted values will be considered +ve (default: 0.5)
+                                 
+              Output:
+              =======
+              A cursor to the row set of the results, including the predicted value as column 'prediction'
+            '''
+            #If the independent columns specified in the training method were a list (instead of a column name of type array)
+            #We should transform the independent columns in the predict table as well
+            if(isinstance(self.model['indep_org'],[].__class__)):
+                if self.madlib_version>=1.6:
+                    if indep is None:
+                        indep = self.model['indep_org']
+                    indep = mkArrString(indep)
+                else:
+                    predict_table_name, indep, dep, _ = pivotCategoricalColumns(self.dbconn,predict_table_name, self.model['indep_org'], actual_label_col)
+                    #Convert transformed independent columns into an array
+                    predict_table_name, indep = convertsColsToArray(self.dbconn, predict_table_name, indep, dep)
+                    
+            stmt = ''' '''
+
+
+            if self.madlib_version>=1.6:
+                stmt = '''SELECT '''
+
+                if (key is not None):
+                    stmt += 'p.{key}, ' 
+                
+                stmt += "madlib.logregr_predict(m.coef, {indep})"
+                
+                if (depTrue is not None):
+                    stmt += ", p.{dep}"
+
+                stmt +="\nFROM {predict_table} p, {model_table} m" 
+                
+                if (key is not None):
+                    stmt += "\nORDER BY p.{key}"
+                
+                stmt = stmt.format(dep=depTrue,
+                                   indep=indep,
+                                   model_table=self.model['output_table_name'],
+                                   predict_table=predict_table_name, 
+                                   key=key)
+
+            else:
+                if(threshold):
+                    stmt = '''
+                          select *,
+                                case when (1.0/(1.0 + exp(-1.0*{madlib_schema}.array_dot({indep}, array{coef}::real[])))) > {threshold} 
+                                          THEN 1 ELSE 0 
+                                end as prediction 
+                          from {table_name}
+                       '''.format(coef=self.model['coef'],
+                                  indep=self.model['indep'],
+                                  table_name=predict_table_name,
+                                  threshold=threshold,
+                                  madlib_schema=self.dbconn.getMADlibSchema()
+                                  )
+                else:
+                #If threshold is not specified, we will return actual predictions
+                    stmt = '''
+                          select *,
+                                (1.0/(1.0 + exp(-1.0*{madlib_schema}.array_dot({indep}, array{coef}::real[]))))  as prediction 
+                         from {table_name}
+                       '''.format(coef=self.model['coef'],
+                                  indep=self.model['indep'],
+                                  table_name=predict_table_name,
+                                  madlib_schema=self.dbconn.getMADlibSchema()
+                                  )
+                       
+            logging.info('statement:{0}'.format(stmt))
+            prediction_results = psql.read_sql(stmt,self.dbconn.getConnection())
+            return prediction_results
+                                                                                                                                                                                              
+        
+                                                                                                                                                                                              
+        def predict_prob(self, predict_table_name,actual_label_col='', indep=None, key=None, verbose=False):
+            ''' 
+              Return predicted probability values using the trained model. Also return precision, recall & f-measure
+              Input:
+              ======
+              predict_table_name : (String) the name of the table to be used for prediction
+              actual_label_col : (String) the name of the actual label column (will be ignored if empty).
+              key: (String) primary key which to order results by
+              verbose: (Bool) Print out psql commands sent
+                                 
+              Output:
+              =======
+              A cursor to the row set of the results, including the predicted value as column 'prediction'
+            '''
+            #If the independent columns specified in the training method were a list (instead of a column name of type array)
+            #We should transform the independent columns in the predict table as well
+            if(isinstance(self.model['indep_org'],[].__class__)):
+                if self.madlib_version>=1.6:
+                    if indep is None:
+                        indep = self.model['indep_org']
+                    indep = mkArrString(indep)
                 else:
                     predict_table_name, indep, dep, _ = pivotCategoricalColumns(self.dbconn,predict_table_name, self.model['indep_org'], actual_label_col)
                     #Convert transformed independent columns into an array
