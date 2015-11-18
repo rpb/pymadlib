@@ -443,7 +443,16 @@ def mkArrString(arr):
             ostring += ","
     ostring += "]"
     return ostring
-                          
+
+def madlibLS(sConn, schema=None):
+    if schema is None:
+        return psql.read_sql('select * from information_schema.schemata;', sConn)
+    else:
+        stmt = '''SELECT * FROM information_schema.tables 
+                  WHERE table_schema = '{schema}';'''.format(schema=schema)
+        return psql.read_sql(stmt, sConn)
+        
+        
 if(__name__=='__main__'):
     from pymadlib import DBConnect
     conn = DBConnect()
